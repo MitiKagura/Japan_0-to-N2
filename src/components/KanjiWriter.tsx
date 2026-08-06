@@ -1,41 +1,149 @@
 import { useEffect, useState, useRef } from 'react';
 import { hiraganaStrokes, katakanaStrokes, type KanaStroke } from '../data/kana_strokes';
-import { kanjiStrokes } from '../data/kanjiSvg';
-import { Play, Pause, RotateCcw, ChevronLeft, ChevronRight, Eye, Sparkles } from 'lucide-react';
+import { JapaneseStrokeWriter } from './JapaneseStrokeWriter';
+import { Play, Pause, RotateCcw, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 
 interface KanjiWriterProps {
   char: string;
   size?: number;
   showControls?: boolean;
   autoPlay?: boolean;
+  /** мс на штрих */
   speedMs?: number;
+  /** показать весь символ сразу без анимации */
+  noAnimation?: boolean;
 }
 
-export function KanjiWriter({ char, size = 260, showControls = true, autoPlay = true, speedMs = 700 }: KanjiWriterProps) {
-  // 1. Пытаемся получить векторные штрихи
-  const strokes = getStrokesForChar(char);
-  const total = strokes ? strokes.length : 0;
+/**
+ * Превращает массив точек [x,y] в SVG path, который можно анимировать
+ * через stroke-dasharray / stroke-dashoffset от начала к концу.
+ *
+ * Точки в kana_strokes.ts упорядочены в правильном направлении написания —
+ * от старта штриха к концу — поэтому анимация отрисует штрих
+ * ровно так, как его пишет каллиграф.
+ */
+function pointsToPath(points: [number, number][]): string {
+  if (points.length === 0) return '';
+  let d = `M ${points[0][0]} ${points[0][1]}`;
+  for (let i = 1; i < points.length; i++) {
+    d += ` L ${points[i][0]} ${points[i][1]}`;
+  }
+  return d;
+}
+
+function isKana(char: string): boolean {
+  // Хирагана 0x3040-0x309F, катакана 0x30A0-0x30FF, полуширокая кана 0xFF65-0xFF9F
+  const code = char.codePointAt(0);
+  if (!code) return false;
+  return (
+    (code >= 0x3040 && code <= 0x309f) ||
+    (code >= 0x30a0 && code <= 0x30ff) ||
+    (code >= 0xff65 && code <= 0xff9f)
+  );
+}
+
+function getKanaStrokes(char: string): KanaStroke[] | null {
+  return hiraganaStrokes[char] ?? katakanaStrokes[char] ?? null;
+}
+
+/**
+ * KanjiWriter — правильная поэтапная анимация написания.
+ *
+ * 1. КАНА (хирагана/катакана) — БАЗОВЫЕ знаки рисуются локально
+ *    через stroke-dasharray по точкам из kana_strokes.ts. Штрихи
+ *    упорядочены в правильном направлении. Для базовых знаков
+ *    (あ-ん, ア-ン) это работает хорошо.
+ *
+ *    Для DAKUTEN/HANDAKUOTN (が, ぱ, ガ, パ) и YÖON (きゃ, きゅ, キャ и т.д.)
+ *    данных в kana_strokes.ts нет, поэтому они идут в JapaneseStrokeWriter
+ *    (animCJK), где медианы нарисованы профессионально.
+ *
+ * 2. КАНДЗИ — ВСЕГДА отдаётся в JapaneseStrokeWriter (animCJK). Там
+ *    профессиональные SVG с правильно прорисованными медианами каждого
+ *    штриха, которые анимируются через stroke-dasharray по median-кривой.
+ *    Это единственный способ гарантировать правильное начертание.
+ */
+export function KanjiWriter({
+  char,
+  size = 260,
+  showControls = true,
+  autoPlay = true,
+  speedMs = 700,
+  noAnimation = false,
+}: KanjiWriterProps) {
+  // Кандзи → ВСЕГДА JapaneseStrokeWriter (animCJK)
+  if (!isKana(char)) {
+    return (
+      <JapaneseStrokeWriter
+        symbol={char}
+        strokes={1}
+        size={size}
+        strokeOrder={[]}
+      />
+    );
+  }
+
+  // Кана — пытаемся локальный рендер.
+  // Если данных нет (ёон, dakuten, handakuten) — fallback на animCJK.
+  const strokes = getKanaStrokes(char);
+  if (!strokes || strokes.length === 0) {
+    return (
+      <JapaneseStrokeWriter
+        symbol={char}
+        strokes={1}
+        size={size}
+        strokeOrder={[]}
+      />
+    );
+  }
+
+  return (
+    <KanaAnimator
+      char={char}
+      strokes={strokes}
+      size={size}
+      showControls={showControls}
+      autoPlay={autoPlay}
+      speedMs={speedMs}
+      noAnimation={noAnimation}
+    />
+  );
+}
+
+/** Аниматор для каны — локальный рендер по точкам. */
+function KanaAnimator({
+  char,
+  strokes,
+  size,
+  showControls,
+  autoPlay,
+  speedMs,
+  noAnimation,
+}: {
+  char: string;
+  strokes: KanaStroke[];
+  size: number;
+  showControls: boolean;
+  autoPlay: boolean;
+  speedMs: number;
+  noAnimation: boolean;
+}) {
   const [current, setCurrent] = useState(0);
   const [playing, setPlaying] = useState(autoPlay);
-  const [revealed, setRevealed] = useState(false);
+  const [revealed, setRevealed] = useState(noAnimation);
   const timer = useRef<number | null>(null);
+
+  const total = strokes.length;
 
   useEffect(() => {
     setCurrent(0);
-    setRevealed(false);
+    setRevealed(noAnimation);
     setPlaying(autoPlay);
-  }, [char, autoPlay]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [char, autoPlay, noAnimation]);
 
   useEffect(() => {
     if (!playing) return;
-    if (total === 0) {
-      // Для символов без векторных данных запускаем красивое автоматическое проявление через 1.5 сек
-      timer.current = window.setTimeout(() => {
-        setRevealed(true);
-        setPlaying(false);
-      }, 1500);
-      return;
-    }
     if (current >= total) {
       setPlaying(false);
       return;
@@ -50,13 +158,14 @@ export function KanjiWriter({ char, size = 260, showControls = true, autoPlay = 
 
   const reset = () => {
     setCurrent(0);
-    setRevealed(false);
+    setRevealed(noAnimation);
     setPlaying(autoPlay);
   };
 
   const prev = () => {
     setCurrent((c) => Math.max(0, c - 1));
     setPlaying(false);
+    setRevealed(false);
   };
 
   const next = () => {
@@ -70,9 +179,6 @@ export function KanjiWriter({ char, size = 260, showControls = true, autoPlay = 
     setPlaying(false);
   };
 
-  // Эффект плавного проявления (для символов без векторных штрихов)
-  const isFallback = total === 0;
-
   return (
     <div className="flex flex-col items-center gap-2">
       <div
@@ -80,129 +186,131 @@ export function KanjiWriter({ char, size = 260, showControls = true, autoPlay = 
         style={{ width: size, height: size }}
       >
         {/* Сетка для каллиграфии */}
-        <svg className="absolute inset-0 pointer-events-none z-10" viewBox="0 0 100 100" width={size} height={size}>
+        <svg
+          className="absolute inset-0 pointer-events-none z-10"
+          viewBox="0 0 100 100"
+          width={size}
+          height={size}
+        >
           <line x1="0" y1="50" x2="100" y2="50" stroke="#ff6b9d" strokeOpacity="0.12" strokeDasharray="2 2" strokeWidth="0.5" />
           <line x1="50" y1="0" x2="50" y2="100" stroke="#ff6b9d" strokeOpacity="0.12" strokeDasharray="2 2" strokeWidth="0.5" />
           <line x1="0" y1="0" x2="100" y2="100" stroke="#ff6b9d" strokeOpacity="0.08" strokeDasharray="2 2" strokeWidth="0.5" />
           <line x1="100" y1="0" x2="0" y2="100" stroke="#ff6b9d" strokeOpacity="0.08" strokeDasharray="2 2" strokeWidth="0.5" />
         </svg>
 
-        {/* 1. БАЗОВЫЙ ШАБЛОН ЭЛЕМЕНТА (Серый контур) */}
+        {/* Серый контур шрифта — база */}
         <div
-          className="absolute inset-0 flex items-center justify-center text-pink-100/10 pointer-events-none select-none transition-all duration-300"
+          className="absolute inset-0 flex items-center justify-center text-pink-100/10 pointer-events-none select-none"
           style={{
-            fontFamily: getFontFamily(),
+            fontFamily: 'Noto Serif JP, Yu Mincho, Hiragino Mincho ProN, serif',
             fontSize: size * 0.72,
             lineHeight: 1,
-            filter: 'blur(0.5px)',
           }}
         >
           {char}
         </div>
 
-        {/* 2. НАПЛЫВ ЦВЕТА И РИСУНКА (Живой эффект) */}
-        {isFallback ? (
-          // Умное «живое» проявление для символов без векторного скелета (например, редких кандзи)
-          <div
-            className={`absolute inset-0 flex items-center justify-center pointer-events-none select-none`}
-            style={{
-              fontFamily: getFontFamily(),
-              fontSize: size * 0.72,
-              lineHeight: 1,
-              color: '#ff6b9d',
-              textShadow: '0 0 8px #ff6b9d, 0 0 15px rgba(255,107,157,0.5)',
-              clipPath: revealed || playing ? 'inset(0 0 0 0)' : 'inset(100% 0 0 0)',
-              transition: playing ? 'clip-path 1.5s cubic-bezier(0.4, 0, 0.2, 1)' : 'clip-path 0.3s ease',
-            }}
-          >
-            {char}
-          </div>
-        ) : (
-          // Настоящая каллиграфическая прорисовка пером поверх контура
-          <svg
-            className="absolute inset-0 z-20"
-            viewBox="0 0 100 100"
-            width={size}
-            height={size}
-          >
-            {strokes && strokes.map((s, i) => {
-              const visible = revealed || i < current;
-              const currentStroke = i === current && !revealed;
-              const pathData = convertPointsToPath(s.points);
+        {/* Правильная поэтапная анимация: stroke-dasharray на каждом штрихе */}
+        <svg
+          className="absolute inset-0 z-20"
+          viewBox="0 0 100 100"
+          width={size}
+          height={size}
+        >
+          {strokes.map((s, i) => {
+            const visible = revealed || i < current;
+            const isCurrent = i === current && !revealed && !noAnimation;
+            const pathData = pointsToPath(s.points);
 
-              return (
-                <g key={i}>
-                  {/* Контур следующего штриха (подсказка) */}
-                  {currentStroke && (
-                    <path
-                      d={pathData}
-                      fill="none"
-                      stroke="#ff6b9d"
-                      strokeOpacity="0.25"
-                      strokeWidth="6"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  )}
-                  {/* Живой нарисованный штрих */}
-                  {visible && (
-                    <path
-                      d={pathData}
-                      fill="none"
-                      stroke="#ff6b9d"
-                      strokeOpacity={0.95}
-                      strokeWidth="7"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      style={{
-                        filter: 'drop-shadow(0 0 5px #ff6b9d) drop-shadow(0 0 10px rgba(255,107,157,0.6))',
-                        strokeDasharray: currentStroke ? 2000 : 0,
-                        strokeDashoffset: currentStroke ? 2000 : 0,
-                        animation: currentStroke ? `draw-stroke 0.65s cubic-bezier(0.25, 1, 0.5, 1) forwards` : undefined,
-                      }}
-                    />
-                  )}
-                  {/* Светящаяся точка пера в процессе рисования */}
-                  {currentStroke && s.points.length > 0 && (
-                    <circle
-                      cx={s.points[0][0]}
-                      cy={s.points[0][1]}
-                      r="4.5"
-                      fill="#fff"
-                      style={{
-                        filter: 'drop-shadow(0 0 8px #ff6b9d) drop-shadow(0 0 15px #ff1f6b)',
-                        animation: `pulse-brush 0.65s infinite alternate`,
-                      }}
-                    />
-                  )}
-                </g>
-              );
-            })}
-          </svg>
-        )}
+            return (
+              <g key={i}>
+                {/* Контур следующего штриха — лёгкая подсказка */}
+                {isCurrent && (
+                  <path
+                    d={pathData}
+                    fill="none"
+                    stroke="#ff6b9d"
+                    strokeOpacity="0.2"
+                    strokeWidth="5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                )}
+                {/* Сам штрих — рисуется stroke-dasharray в правильном направлении */}
+                {visible && (
+                  <path
+                    d={pathData}
+                    fill="none"
+                    stroke="#ff6b9d"
+                    strokeOpacity={0.95}
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{
+                      filter: 'drop-shadow(0 0 4px #ff6b9d) drop-shadow(0 0 8px rgba(255,107,157,.55))',
+                      strokeDasharray: 200,
+                      strokeDashoffset: isCurrent ? 200 : 0,
+                      animation: isCurrent ? 'cjk-stroke 0.7s ease-out forwards' : undefined,
+                    }}
+                  />
+                )}
+                {/* Точка пера на старте текущего штриха */}
+                {isCurrent && s.points.length > 0 && (
+                  <circle
+                    cx={s.points[0][0]}
+                    cy={s.points[0][1]}
+                    r="3.5"
+                    fill="#fff"
+                    style={{
+                      filter: 'drop-shadow(0 0 6px #ff6b9d) drop-shadow(0 0 12px #ff1f6b)',
+                      animation: 'pulse-brush 0.6s infinite alternate',
+                    }}
+                  />
+                )}
+              </g>
+            );
+          })}
+        </svg>
 
-        {/* Индикатор прогресса */}
+        {/* Прогресс */}
         <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-pink-400/90 text-black text-[10px] font-bold border border-pink-200 z-30 uppercase tracking-widest">
-          {isFallback ? 'Auto' : `${current}/${total}`}
+          {current}/{total}
         </div>
 
-        {/* Спецэффект для полностью завершенного знака */}
-        {(revealed || current >= total) && (
+        {/* Финальный эффект */}
+        {current >= total && (
           <div className="absolute inset-0 bg-pink-500/5 pointer-events-none animate-pulse z-0" />
         )}
       </div>
 
+      {/* Подпись с текущим штрихом и направлением */}
+      <div className="text-[10px] uppercase tracking-widest text-pink-300/80 text-center max-w-[260px] leading-tight">
+        {strokes[Math.min(current, total - 1)]?.hint ?? ''}
+      </div>
+
       {showControls && (
         <div className="flex items-center gap-1 z-30">
-          <button onClick={reset} className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black" title="Заново">
+          <button
+            type="button"
+            onClick={reset}
+            className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black"
+            title="Заново"
+          >
             <RotateCcw size={14} />
           </button>
-          <button onClick={prev} disabled={current === 0 || isFallback} className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black disabled:opacity-30" title="Предыдущий">
+          <button
+            type="button"
+            onClick={prev}
+            disabled={current === 0}
+            className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black disabled:opacity-30"
+            title="Предыдущий"
+          >
             <ChevronLeft size={14} />
           </button>
           <button
+            type="button"
             onClick={() => {
-              if (current >= total && !isFallback) reset();
+              if (current >= total) reset();
               else setPlaying(!playing);
             }}
             className="p-1.5 border border-pink-400 bg-pink-400/10 text-pink-300 hover:bg-pink-400 hover:text-black"
@@ -210,98 +318,38 @@ export function KanjiWriter({ char, size = 260, showControls = true, autoPlay = 
           >
             {playing ? <Pause size={14} /> : <Play size={14} />}
           </button>
-          <button onClick={next} disabled={current >= total || isFallback} className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black disabled:opacity-30" title="Следующий">
+          <button
+            type="button"
+            onClick={next}
+            disabled={current >= total}
+            className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black disabled:opacity-30"
+            title="Следующий"
+          >
             <ChevronRight size={14} />
           </button>
-          <button onClick={revealAll} className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black" title="Показать всё">
-            <Eye size={14} />
+          <button
+            type="button"
+            onClick={revealAll}
+            className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black"
+            title="Показать сразу"
+          >
+            <Sparkles size={14} />
           </button>
-        </div>
-      )}
-
-      {/* Текстовые подсказки */}
-      {!isFallback && current < total && strokes && strokes[current] && (
-        <div className="text-xs text-pink-300/80 text-center max-w-[240px] px-2 py-1 bg-pink-950/20 border border-pink-400/10 min-h-[32px] flex items-center justify-center">
-          {strokes[current].hint}
-        </div>
-      )}
-      {isFallback && playing && (
-        <div className="text-xs text-pink-300/80 text-center max-w-[240px] px-2 py-1 bg-pink-950/20 border border-pink-400/10 min-h-[32px] flex items-center justify-center gap-1.5">
-          <Sparkles size={12} className="animate-spin text-pink-300" />
-          <span>Проявление каллиграфии...</span>
-        </div>
-      )}
-      {(revealed || current >= total) && (
-        <div className="text-xs text-pink-400 font-bold uppercase tracking-widest text-center min-h-[32px] flex items-center justify-center">
-          完成 — Отлично!
         </div>
       )}
 
       <style>{`
-        @keyframes draw-stroke {
-          from { stroke-dashoffset: 2000; }
+        @keyframes cjk-stroke {
+          from { stroke-dashoffset: 200; }
           to { stroke-dashoffset: 0; }
         }
         @keyframes pulse-brush {
-          from { r: 3.5; opacity: 0.8; }
-          to { r: 5.5; opacity: 1; }
+          from { transform: scale(1); opacity: 0.85; }
+          to { transform: scale(1.6); opacity: 0.35; }
         }
       `}</style>
     </div>
   );
 }
 
-// === Вспомогательные хелперы ===
 
-function getFontFamily(): string {
-  return "'Noto Serif JP', 'Georgia', serif";
-}
-
-function getStrokesForChar(char: string): KanaStroke[] | null {
-  // 1. Проверяем хирагану
-  if (hiraganaStrokes[char]) return hiraganaStrokes[char];
-  // 2. Проверяем катакану
-  if (katakanaStrokes[char]) return katakanaStrokes[char];
-  // 3. Проверяем кандзи (если есть SVG)
-  if (kanjiStrokes[char]) {
-    // Конвертируем KanjiVG в формат KanaStroke
-    return kanjiStrokes[char].map((s) => {
-      const pts = parseSvgPathToPoints(s.d);
-      return {
-        points: pts,
-        hint: s.hint,
-      };
-    });
-  }
-  return null;
-}
-
-function convertPointsToPath(points: [number, number][]): string {
-  if (points.length === 0) return '';
-  let d = `M ${points[0][0]} ${points[0][1]}`;
-  for (let i = 1; i < points.length; i++) {
-    d += ` L ${points[i][0]} ${points[i][1]}`;
-  }
-  return d;
-}
-
-function parseSvgPathToPoints(d: string): [number, number][] {
-  // Простой парсер путей типа "M x y L x2 y2" в массив точек
-  const pts: [number, number][] = [];
-  const tokens = d.split(/\s+/);
-  let i = 0;
-  while (i < tokens.length) {
-    const cmd = tokens[i];
-    if (cmd === 'M' || cmd === 'L') {
-      const x = parseFloat(tokens[i + 1]);
-      const y = parseFloat(tokens[i + 2]);
-      if (!isNaN(x) && !isNaN(y)) {
-        pts.push([x, y]);
-      }
-      i += 3;
-    } else {
-      i++;
-    }
-  }
-  return pts;
-}

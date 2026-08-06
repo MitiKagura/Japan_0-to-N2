@@ -8,6 +8,7 @@ export interface InlineQuestion {
   explanation: string;
   hint?: string;
 }
+
 export interface CodeTask {
   instruction: string;
   starter: string;
@@ -16,6 +17,7 @@ export interface CodeTask {
   hint: string;
   solution: string;
 }
+
 export interface LessonStage {
   id: string;
   title: string;
@@ -25,12 +27,14 @@ export interface LessonStage {
   question?: InlineQuestion;
   codeTask?: CodeTask;
 }
+
 export interface FinalQuiz {
   question: string;
   options: string[];
   correct: number;
   explanation: string;
 }
+
 export interface FinalTask {
   title: string;
   difficulty: Difficulty;
@@ -38,6 +42,7 @@ export interface FinalTask {
   hints: string[];
   solution: string;
 }
+
 export interface Lesson {
   id: string;
   title: string;
@@ -47,6 +52,7 @@ export interface Lesson {
   finalQuiz: FinalQuiz[];
   finalTasks: FinalTask[];
 }
+
 export interface Course {
   id: string;
   title: string;
@@ -67,6 +73,7 @@ export interface KanaChar {
   strokeOrder: string[];
   example?: string;
 }
+
 export interface KanjiChar {
   char: string;
   meaning: string;

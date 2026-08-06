@@ -1,12 +1,14 @@
 {
-  "name": "react-vite-tailwind",
+  "name": "sakura-sensei",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "server": "cd server && npm start",
+    "server:dev": "cd server && npm run dev"
   },
   "dependencies": {
     "@types/bcryptjs": "^2.4.6",

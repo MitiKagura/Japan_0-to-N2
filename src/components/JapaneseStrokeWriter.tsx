@@ -13,53 +13,33 @@ const ANIM_CJK_BASE = 'https://raw.githubusercontent.com/parsimonhi/animCJK/mast
 
 function getSvgUrl(symbol: string): string | null {
   const chars = Array.from(symbol);
-  // A yoon pair (きゃ / キャ) is two separate glyphs. The local writer handles
-  // it as one composition; AnimCJK is used for every single kana/kanji glyph.
   if (chars.length !== 1) return null;
   const code = chars[0].codePointAt(0);
   if (!code) return null;
-  const isKana = (code >= 0x3040 && code <= 0x30ff) || (code >= 0x31f0 && code <= 0x31ff);
-  return `${ANIM_CJK_BASE}/${isKana ? 'svgsJaKana' : 'svgsJa'}/${code}.svg`;
+  const isKana =
+    (code >= 0x3040 && code <= 0x309f) ||
+    (code >= 0x30a0 && code <= 0x30ff) ||
+    (code >= 0x31f0 && code <= 0x31ff);
+  const folder = isKana ? 'svgsJaKana' : 'svgsJa';
+  return `${ANIM_CJK_BASE}/${folder}/${code}.svg`;
 }
 
-function recolorSvg(raw: string, size: number): string {
-  // AnimCJK files use the actual stroke outlines as clip paths, then animate a
-  // dashed median line inside each outline. We preserve that geometry and only
-  // replace its black/gray palette with the sakura palette used by this app.
-  const withoutScripts = raw.replace(/<script[\s\S]*?<\/script>/gi, '');
-  const customStyle = `
-    <style>
-      @keyframes sakuraCjkStroke { to { stroke-dashoffset: 0; } }
-      svg.acjk { width:${size}px; height:${size}px; display:block; overflow:visible; }
-      svg.acjk path[id] { fill:#fff5f9 !important; opacity:.96; }
-      svg.acjk path[clip-path] {
-        stroke:#ff4f8c !important;
-        filter:drop-shadow(0 0 6px #ff6b9d) drop-shadow(0 0 12px rgba(255,107,157,.72));
-        animation-name:sakuraCjkStroke !important;
-        animation-duration:.72s !important;
-        animation-timing-function:ease-out !important;
-        animation-fill-mode:forwards !important;
-        animation-delay:var(--d, 0s) !important;
-        stroke-dasharray:3337 !important;
-        stroke-dashoffset:3339 !important;
-        stroke-width:128 !important;
-        stroke-linecap:round !important;
-        fill:none !important;
-      }
-    </style>`;
-  return withoutScripts.replace(/<style>[\s\S]*?<\/style>/i, customStyle);
+interface StrokeInfo {
+  d: string;
+  clipPath: string;
+  delay: number;
 }
 
 export function JapaneseStrokeWriter({ symbol, strokes, strokeOrder, size = 260 }: JapaneseStrokeWriterProps) {
   const url = useMemo(() => getSvgUrl(symbol), [symbol]);
-  const [svg, setSvg] = useState<string | null>(null);
+  const [svgText, setSvgText] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(url));
   const [failed, setFailed] = useState(false);
   const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     let active = true;
-    setSvg(null);
+    setSvgText(null);
     setFailed(false);
     setLoading(Boolean(url));
     if (!url) {
@@ -72,7 +52,7 @@ export function JapaneseStrokeWriter({ symbol, strokes, strokeOrder, size = 260 
         return response.text();
       })
       .then((raw) => {
-        if (active) setSvg(recolorSvg(raw, size));
+        if (active) setSvgText(raw);
       })
       .catch(() => {
         if (active) setFailed(true);
@@ -80,55 +60,169 @@ export function JapaneseStrokeWriter({ symbol, strokes, strokeOrder, size = 260 
       .finally(() => {
         if (active) setLoading(false);
       });
-    return () => { active = false; };
-  }, [url, size, revision]);
+    return () => {
+      active = false;
+    };
+  }, [url, revision]);
 
-  if (!svg || loading || failed) {
+  if (loading || failed || !svgText) {
     return (
       <div className="flex flex-col items-center gap-2">
+        {failed && (
+          <div className="flex items-center gap-1 text-[10px] text-rose-300/80">
+            <WifiOff size={12} /> AnimCJK недоступен — показываю локальную анимацию
+          </div>
+        )}
         <SymbolWriter
           symbol={symbol}
           strokes={strokes}
           strokeOrder={strokeOrder}
           size={size}
-          autoPlay={!loading}
+          autoPlay={true}
+          showControls={true}
         />
-        {failed && (
-          <div className="flex items-center gap-1 text-[10px] text-pink-300/60">
-            <WifiOff size={11} /> Локальная анимация: AnimCJK недоступен
-          </div>
-        )}
       </div>
     );
   }
 
   return (
     <div className="flex flex-col items-center gap-2">
-      <div className="relative border-2 border-pink-400/60 bg-[#1a0a14] overflow-hidden" style={{ width: size, height: size }}>
-        <div className="absolute inset-0 opacity-30 pointer-events-none" style={{
-          backgroundImage: 'linear-gradient(rgba(255,107,157,.22) 1px, transparent 1px), linear-gradient(90deg, rgba(255,107,157,.22) 1px, transparent 1px)',
-          backgroundSize: `${size / 4}px ${size / 4}px`,
-        }} />
-        <div className="absolute left-1/2 top-0 bottom-0 border-l border-dashed border-pink-400/20 pointer-events-none" />
-        <div className="absolute top-1/2 left-0 right-0 border-t border-dashed border-pink-400/20 pointer-events-none" />
-        <div
-          key={revision}
-          className="relative z-10 flex items-center justify-center w-full h-full"
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
-      </div>
-      <div className="flex items-center gap-2">
+      <AnimCjkRenderer svgText={svgText} size={size} />
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-pink-300/80">
         <button
+          type="button"
           onClick={() => setRevision((r) => r + 1)}
           className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black"
           title="Проиграть порядок черт заново"
         >
-          <RotateCcw size={14} />
+          <RotateCcw size={12} />
         </button>
-        <span className="text-[10px] uppercase tracking-widest text-pink-300/70">
-          Реальный порядок черт · AnimCJK
-        </span>
+        <span>Реальный порядок черт · AnimCJK</span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * AnimCjkRenderer — рендерит SVG из animCJK как настоящий SVG-элемент,
+ * а не через dangerouslySetInnerHTML в div.
+ *
+ * Алгоритм:
+ * 1. Парсим исходный SVG из animCJK, извлекаем:
+ *    - viewBox
+ *    - контуры штрихов (<path id="zXXXXdN">) — используются как clipPath
+ *    - медианы (<path style="--d:Ns" pathLength="3333" clip-path="url(#zXXXXcN)">) — анимируются
+ * 2. Генерируем clipPath'ы в <defs>
+ * 3. Рисуем контуры внизу (заполняются)
+ * 4. Рисуем медианы поверх с stroke-dasharray/stroke-dashoffset и задержками
+ */
+function AnimCjkRenderer({ svgText, size }: { svgText: string; size: number }) {
+  // Парсим viewBox
+  const viewBoxMatch = svgText.match(/<svg[^>]*viewBox=["']([^"']+)["']/i);
+  const viewBox = viewBoxMatch ? viewBoxMatch[1] : '0 0 1024 1024';
+
+  // Извлекаем контуры (<path id="...">) — НЕ с clip-path
+  // Это и есть заливка штриха (внутренность кисти).
+  const fills: { id: string; d: string }[] = [];
+  const fillRegex = /<path\s+id="(z\w+)"\s+d="([^"]+)"\s*\/?>/g;
+  let m: RegExpExecArray | null;
+  const cleanSvg = svgText.replace(/<style[\s\S]*?<\/style>/gi, '');
+  while ((m = fillRegex.exec(cleanSvg)) !== null) {
+    fills.push({
+      id: m[1],
+      d: m[2].replace(/&#x([0-9A-Fa-f]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))),
+    });
+  }
+
+  // Извлекаем медианы (<path style="--d:Ns" pathLength="3333" clip-path="url(#zXXXXcN)">)
+  const strokes: StrokeInfo[] = [];
+  const strokeRegex =
+    /<path\s+style="--d:(\d+)s;"\s+pathLength="3333"\s+clip-path="(url\(#[^)]+\))"\s+d="([^"]+)"\s*\/?>/g;
+  while ((m = strokeRegex.exec(cleanSvg)) !== null) {
+    const baseDelay = parseFloat(m[1]);
+    const clipPath = m[2];
+    const d = m[3].replace(/&#x([0-9A-Fa-f]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+    strokes.push({
+      d,
+      clipPath,
+      delay: Math.max(0, baseDelay - 1),
+    });
+  }
+
+  // Цвета и стили для заливок и медиан.
+  // strokeWidth уменьшен до 28 — раньше было 128, что делало обводку
+  // чрезмерно жирной. Теперь она пропорциональна иероглифу.
+  const fillColor = '#ffd1e8';
+  const strokeColor = '#ff4f8c';
+  const STROKE_WIDTH = 28;
+
+  return (
+    <div
+      className="relative bg-[#1a0a14] border-2 border-pink-400/60"
+      style={{ width: size, height: size }}
+    >
+      <svg
+        viewBox={viewBox}
+        width={size}
+        height={size}
+        xmlns="http://www.w3.org/2000/svg"
+        style={{ display: 'block' }}
+      >
+        <defs>
+          {fills.map((f) => (
+            <clipPath key={f.id} id={f.id}>
+              <path d={f.d} />
+            </clipPath>
+          ))}
+        </defs>
+
+        {/* Контуры штрихов (заливка) — появляются по очереди */}
+        {fills.map((f, i) => (
+          <path
+            key={f.id}
+            d={f.d}
+            fill={fillColor}
+            opacity="0"
+            style={{
+              animation: `cjk-fill-in 0.4s linear forwards`,
+              animationDelay: `${i * 0.4}s`,
+            }}
+          />
+        ))}
+
+        {/* Медианы — рисуются правильно по направлению штриха.
+            Используем pathLength=1, чтобы stroke-dasharray работал
+            корректно для любой длины path. */}
+        {strokes.map((s, i) => (
+          <path
+            key={i}
+            d={s.d}
+            clipPath={s.clipPath}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={STROKE_WIDTH}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            pathLength="1"
+            style={{
+              strokeDasharray: 1,
+              strokeDashoffset: 1,
+              filter: 'drop-shadow(0 0 3px #ff6b9d) drop-shadow(0 0 6px rgba(255,107,157,.5))',
+              animation: `cjk-median-draw 0.7s ease-out forwards`,
+              animationDelay: `${s.delay * 0.8}s`,
+            }}
+          />
+        ))}
+      </svg>
+      <style>{`
+        @keyframes cjk-fill-in {
+          from { opacity: 0; }
+          to { opacity: 0.96; }
+        }
+        @keyframes cjk-median-draw {
+          to { stroke-dashoffset: 0; }
+        }
+      `}</style>
     </div>
   );
 }

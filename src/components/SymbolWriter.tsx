@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Eye, Pause, Play, RotateCcw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Pause, Play, RotateCcw } from 'lucide-react';
 
 type Direction = '→' | '←' | '↓' | '↑' | '↘' | '↙' | '↗' | '↖' | '↻' | '↺' | '·';
 
@@ -27,6 +27,13 @@ function inferDirection(label: string | undefined, index: number): Direction {
   return directionPattern[index % directionPattern.length];
 }
 
+/**
+ * Этот компонент — fallback для случая, когда локальные векторные данные отсутствуют.
+ * Анимация делается через CSS clip-path (НЕ заливка буквы), двигаясь в направлении штриха.
+ * Это «имитация» правильного написания, но не покадровая отрисовка каждого штриха.
+ * Для настоящей покадровой анимации используйте JapaneseStrokeWriter (animCJK) или
+ * KanjiWriter (KanjiVG).
+ */
 function progressClip(direction: Direction, progress: number): string {
   const p = Math.max(0, Math.min(100, progress));
   const inv = 100 - p;
@@ -119,14 +126,17 @@ export function SymbolWriter({
         className="relative overflow-hidden border-2 border-pink-400/60 bg-[#1a0a14] select-none"
         style={{ width: size, height: size }}
       >
-        <div className="absolute inset-0 opacity-30 pointer-events-none" style={{
-          backgroundImage: 'linear-gradient(rgba(255,107,157,.22) 1px, transparent 1px), linear-gradient(90deg, rgba(255,107,157,.22) 1px, transparent 1px)',
-          backgroundSize: `${size / 4}px ${size / 4}px`,
-        }} />
+        <div
+          className="absolute inset-0 opacity-30 pointer-events-none"
+          style={{
+            backgroundImage:
+              'linear-gradient(rgba(255,107,157,.22) 1px, transparent 1px), linear-gradient(90deg, rgba(255,107,157,.22) 1px, transparent 1px)',
+            backgroundSize: `${size / 4}px ${size / 4}px`,
+          }}
+        />
         <div className="absolute left-1/2 top-0 bottom-0 border-l border-dashed border-pink-400/20 pointer-events-none" />
         <div className="absolute top-1/2 left-0 right-0 border-t border-dashed border-pink-400/20 pointer-events-none" />
 
-        {/* Base glyph: always the exact Japanese glyph, in paper-white. */}
         <span
           className="absolute inset-0 flex items-center justify-center leading-none"
           style={{
@@ -139,7 +149,6 @@ export function SymbolWriter({
           {symbol}
         </span>
 
-        {/* Persistent sakura tint increases stroke by stroke, exactly inside the glyph. */}
         <span
           className="absolute inset-0 flex items-center justify-center leading-none pointer-events-none"
           style={{
@@ -153,7 +162,6 @@ export function SymbolWriter({
           {symbol}
         </span>
 
-        {/* The live brush is clipped by the original glyph, never drawn beside it. */}
         {step < total && (
           <span
             className="absolute inset-0 flex items-center justify-center leading-none pointer-events-none"
@@ -182,25 +190,48 @@ export function SymbolWriter({
         )}
       </div>
 
+      <div className="text-[10px] uppercase tracking-widest text-pink-300/80 text-center max-w-[260px] leading-tight">
+        <span className="text-pink-300 mr-1">{currentDirection}</span>
+        {currentLabel}
+      </div>
+
       {showControls && (
         <div className="flex items-center gap-1">
-          <button onClick={reset} className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black" title="Заново"><RotateCcw size={14} /></button>
-          <button onClick={previous} disabled={step === 0} className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black disabled:opacity-30" title="Предыдущий штрих"><ChevronLeft size={14} /></button>
-          <button onClick={() => { if (step >= total) reset(); else setPlaying(!playing); }} className="p-1.5 border border-pink-400 bg-pink-400/10 text-pink-300 hover:bg-pink-400 hover:text-black" title={playing ? 'Пауза' : 'Пуск'}>
+          <button
+            onClick={reset}
+            className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black"
+            title="Заново"
+          >
+            <RotateCcw size={14} />
+          </button>
+          <button
+            onClick={previous}
+            disabled={step === 0}
+            className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black disabled:opacity-30"
+            title="Предыдущий штрих"
+          >
+            <ChevronLeft size={14} />
+          </button>
+          <button
+            onClick={() => {
+              if (step >= total) reset();
+              else setPlaying(!playing);
+            }}
+            className="p-1.5 border border-pink-400 bg-pink-400/10 text-pink-300 hover:bg-pink-400 hover:text-black"
+            title={playing ? 'Пауза' : 'Пуск'}
+          >
             {playing ? <Pause size={14} /> : <Play size={14} />}
           </button>
-          <button onClick={next} disabled={step >= total} className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black disabled:opacity-30" title="Следующий штрих"><ChevronRight size={14} /></button>
-          <button onClick={() => { setStep(total); setFlow(100); setPlaying(false); }} className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black" title="Показать всё"><Eye size={14} /></button>
+          <button
+            onClick={next}
+            disabled={step >= total}
+            className="p-1.5 border border-pink-400/40 text-pink-300 hover:bg-pink-400 hover:text-black disabled:opacity-30"
+            title="Следующий штрих"
+          >
+            <ChevronRight size={14} />
+          </button>
         </div>
       )}
-
-      <div className="min-h-5 text-center text-xs max-w-[300px]">
-        {step < total ? (
-          <span className="text-pink-200"><span className="text-pink-400 font-bold mr-1">{currentDirection}</span>{currentLabel}</span>
-        ) : (
-          <span className="text-pink-400 font-bold uppercase tracking-widest">完成 — символ написан</span>
-        )}
-      </div>
     </div>
   );
 }
